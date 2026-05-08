@@ -25,17 +25,32 @@ function(_register_asset ASSET_PATH OUT_ENUM_NAME)
   get_filename_component(ABS_PATH   "${ASSET_PATH}" ABSOLUTE)
   file(TO_CMAKE_PATH "${ABS_PATH}" CLEAN_PATH)
 
+  # Enum entry
   set_property(GLOBAL APPEND_STRING PROPERTY ASSET_ENUM_ENTRIES
     "    ASSET_${ASSET_NAME},\n")
 
-  set(EMBED_STR "const unsigned char g_${ASSET_NAME}_data[] = {\n")
+  # Embed block:
+  #   DEV    — only the path string, no binary data (loaded from disk at runtime)
+  #   export — binary data via #embed, no path string
+  set(EMBED_STR "#ifdef DEV\n")
+  string(APPEND EMBED_STR "const char g_${ASSET_NAME}_path[] = \"${CLEAN_PATH}\";\n")
+  string(APPEND EMBED_STR "#else\n")
+  string(APPEND EMBED_STR "const unsigned char g_${ASSET_NAME}_data[] = {\n")
   string(APPEND EMBED_STR "    #embed \"${CLEAN_PATH}\"\n")
   string(APPEND EMBED_STR "};\n")
-  string(APPEND EMBED_STR "const unsigned int g_${ASSET_NAME}_size = sizeof(g_${ASSET_NAME}_data);\n\n")
+  string(APPEND EMBED_STR "const unsigned int g_${ASSET_NAME}_size = sizeof(g_${ASSET_NAME}_data);\n")
+  string(APPEND EMBED_STR "#endif\n\n")
   set_property(GLOBAL APPEND_STRING PROPERTY ASSET_EMBED_BLOCKS "${EMBED_STR}")
 
-  set_property(GLOBAL APPEND_STRING PROPERTY ASSET_TABLE_ENTRIES
-    "    [ASSET_${ASSET_NAME}] = { ASSET_TYPE_${TYPE}, { g_${ASSET_NAME}_data, g_${ASSET_NAME}_size, NULL } },\n")
+  # Table entry:
+  #   DEV    — NULL/0 for data/size, path set (loaded from disk at runtime)
+  #   export — embedded data/size, NULL path
+  set(TABLE_ENTRY "#ifdef DEV\n")
+  string(APPEND TABLE_ENTRY "    [ASSET_${ASSET_NAME}] = { ASSET_TYPE_${TYPE}, { NULL, 0, g_${ASSET_NAME}_path } },\n")
+  string(APPEND TABLE_ENTRY "#else\n")
+  string(APPEND TABLE_ENTRY "    [ASSET_${ASSET_NAME}] = { ASSET_TYPE_${TYPE}, { g_${ASSET_NAME}_data, g_${ASSET_NAME}_size, NULL } },\n")
+  string(APPEND TABLE_ENTRY "#endif\n")
+  set_property(GLOBAL APPEND_STRING PROPERTY ASSET_TABLE_ENTRIES "${TABLE_ENTRY}")
 
   set(${OUT_ENUM_NAME} "ASSET_${ASSET_NAME}" PARENT_SCOPE)
 endfunction()
@@ -64,14 +79,14 @@ function(embed_asset_bundle BUNDLE_NAME)
 endfunction()
 
 function(generate_assets_file)
-  get_property(ENUM_VAL  GLOBAL PROPERTY ASSET_ENUM_ENTRIES)
-  get_property(TABL_VAL  GLOBAL PROPERTY ASSET_TABLE_ENTRIES)
-  get_property(EMBD_VAL  GLOBAL PROPERTY ASSET_EMBED_BLOCKS)
+  get_property(ENUM_VAL     GLOBAL PROPERTY ASSET_ENUM_ENTRIES)
+  get_property(TABL_VAL     GLOBAL PROPERTY ASSET_TABLE_ENTRIES)
+  get_property(EMBD_VAL     GLOBAL PROPERTY ASSET_EMBED_BLOCKS)
   get_property(BUNDLE_NAMES GLOBAL PROPERTY ASSET_BUNDLE_NAMES)
 
   file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/generated")
 
-  # ── Header ──────────────────────────────────────────────────────────────
+  # ── Header ───────────────────────────────────────────────────────────────
   set(HEADER_CONTENT
 "#pragma once
 enum {
@@ -85,7 +100,7 @@ ${ENUM_VAL}    ASSET_COUNT
 
   file(WRITE "${CMAKE_BINARY_DIR}/generated/assets_generated.h" "${HEADER_CONTENT}")
 
-  # ── Source ───────────────────────────────────────────────────────────────
+  # ── Source ────────────────────────────────────────────────────────────────
   set(GEN_C_FILE "${CMAKE_BINARY_DIR}/generated/assets_generated.c")
   file(WRITE  "${GEN_C_FILE}" "#include <assets.h>\n#include \"assets_generated.h\"\n\n")
   file(APPEND "${GEN_C_FILE}" "${EMBD_VAL}")
@@ -94,9 +109,7 @@ ${ENUM_VAL}    ASSET_COUNT
   foreach(BNAME IN LISTS BUNDLE_NAMES)
     get_property(BIDS GLOBAL PROPERTY "ASSET_BUNDLE_${BNAME}_IDS")
     list(LENGTH BIDS BCOUNT)
-
     string(JOIN ", " BIDS_CSV ${BIDS})
-
     file(APPEND "${GEN_C_FILE}"
 "\nstatic const asset_id _${BNAME}_ids[${BCOUNT}] = { ${BIDS_CSV} };
 asset_bundle ${BNAME}_bundle = { _${BNAME}_ids, ${BCOUNT} };\n")

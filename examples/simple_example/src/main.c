@@ -1,4 +1,4 @@
-// examples/main.c
+// examples/simple_example_src/main.c
 
 #include <assets.h>
 

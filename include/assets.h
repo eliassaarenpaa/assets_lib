@@ -13,7 +13,9 @@ typedef enum {
 typedef struct {
   const unsigned char *data;
   unsigned int size;
+#ifdef DEV
   const char *path; // Disk path for dev mode
+#endif
 } asset_data;
 typedef struct {
   asset_type type;

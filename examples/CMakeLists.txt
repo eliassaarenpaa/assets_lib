@@ -1,14 +1,14 @@
 # examples/CMakeLists.txt
 
-add_executable(asset_example
-    main.c
+add_executable(simple_example
+    simple_example/src/main.c
 )
 
-target_link_libraries(asset_example PRIVATE
+target_link_libraries(simple_example PRIVATE
     assets
 )
 
-embed_assets(asset_example
+embed_assets(simple_example
   assets/texture_01.png
 )
 embed_asset_bundle(test

@@ -8,6 +8,7 @@ if(MSVC OR WIN32)
   add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
 endif()
 
+option(DEV "Development mode" OFF)
 option(ASSETS_BUILD_EXAMPLES "Build examples" ON)
 
 # -------------------------------------------------
@@ -36,7 +37,7 @@ include(cmake/assets.cmake)
 add_library(assets
     src/assets.c
     src/third_party_impl.c
-    "${GEN_ASSET_SRC}" # This is what was missing!
+    "${GEN_ASSET_SRC}"
 )
 
 target_include_directories(assets
@@ -48,7 +49,9 @@ PUBLIC
     ${Stb_INCLUDE_DIR}
 )
 
-
+if(DEV)
+  target_compile_definitions(assets PUBLIC DEV)
+endif()
 
 # -------------------------------------------------
 # 5. Examples
