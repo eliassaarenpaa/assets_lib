@@ -16,6 +16,7 @@ option(ASSETS_BUILD_EXAMPLES "Build examples" ON)
 set(GEN_DIR "${CMAKE_BINARY_DIR}/generated")
 set(GEN_ASSET_SRC "${GEN_DIR}/assets_generated.c")
 file(MAKE_DIRECTORY "${GEN_DIR}")
+file(TOUCH "${GEN_ASSET_SRC}")
 
 # -------------------------------------------------
 # 2. Dependencies
