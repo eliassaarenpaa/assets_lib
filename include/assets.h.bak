@@ -1,0 +1,279 @@
+#ifndef ASSET_H
+#define ASSET_H
+
+#pragma once
+
+#include <assert.h>
+#include <stddef.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+/*
+ * ---------------------------------------------------------------
+ * PRE-REQUISITES
+ * ---------------------------------------------------------------
+ * This header expects the following types to be defined:
+ * - stb_image:  (unsigned char*)
+ * - cgltf:      cgltf_data, cgltf_options, cgltf_result
+ * - miniaudio:  ma_decoder, ma_result
+ */
+
+// --- Raw Data Container ---
+typedef struct {
+  const unsigned char *data;
+  unsigned int size;
+} AssetData;
+
+// --- Asset Classifications ---
+typedef enum {
+  ASSET_TYPE_TEXTURE,
+  ASSET_TYPE_MODEL,
+  ASSET_TYPE_AUDIO,
+  ASSET_TYPE_BIN,
+  ASSET_TYPE_RAW,
+} AssetType;
+
+// --- Global Table Entry ---
+typedef struct {
+  AssetType type;
+  AssetData raw; // Embedded in binary (Shipping) or heap (Dev)
+  void *parsed;  // Managed pointer (NULL if not loaded)
+} AssetEntry;
+
+// --- Handle Type ---
+// AssetID is typically an index into ASSET_TABLE, defined in assets_generated.h
+typedef int AssetID;
+
+// The global table itself is defined in the generated source file
+extern AssetEntry ASSET_TABLE[];
+
+/*
+ * ---------------------------------------------------------------
+ * BACKEND: RAW DATA ACCESS
+ * ---------------------------------------------------------------
+ */
+#ifdef SHIPPING
+#include "incbin.h"
+#define ASSET_EXTERN_TEXTURE(Name) INCBIN_EXTERN(Name);
+#define ASSET_EXTERN_MODEL(Name) INCBIN_EXTERN(Name);
+#define ASSET_EXTERN_AUDIO(Name) INCBIN_EXTERN(Name);
+#define ASSET_EXTERN_BIN(Name) INCBIN_EXTERN(Name);
+#define ASSET_EXTERN_RAW(Name) INCBIN_EXTERN(Name);
+#define ASSET_RAW(Name) {g##Name##Data, (unsigned int)g##Name##Size}
+#else
+// Dev mode: Files are loaded from disk on demand
+#define ASSET_EXTERN_TEXTURE(Name)
+#define ASSET_EXTERN_MODEL(Name)
+#define ASSET_EXTERN_AUDIO(Name)
+#define ASSET_EXTERN_BIN(Name)
+#define ASSET_EXTERN_RAW(Name)
+
+static inline AssetData _asset_load_disk(const char *path) {
+  FILE *f = fopen(path, "rb");
+  assert(f && "Asset file not found - check ASSET_PATH definitions");
+
+  fseek(f, 0, SEEK_END);
+  size_t size = ftell(f);
+  rewind(f);
+
+  unsigned char *data = (unsigned char *)malloc(size);
+  size_t read_size = fread(data, 1, size, f);
+  (void)read_size; // Silence unused warning
+
+  fclose(f);
+  return (AssetData){data, (unsigned int)size};
+}
+
+#define ASSET_RAW(Name) _asset_load_disk(ASSET_PATH_##Name)
+#endif
+
+/*
+ * ---------------------------------------------------------------
+ * API: LOADING (Bytes -> Objects)
+ * ---------------------------------------------------------------
+ */
+static inline unsigned char *asset_load_texture(AssetID id, int *w, int *h,
+                                                int *ch) {
+  AssetEntry *e = &ASSET_TABLE[id];
+  assert(e->type == ASSET_TYPE_TEXTURE);
+  assert(!e->parsed && "Asset already loaded");
+
+  e->parsed = stbi_load_from_memory(e->raw.data, e->raw.size, w, h, ch, 4);
+  assert(e->parsed && "stbi_load failed");
+  return (unsigned char *)e->parsed;
+}
+
+static inline cgltf_data *asset_load_model(AssetID id) {
+  AssetEntry *e = &ASSET_TABLE[id];
+  assert(e->type == ASSET_TYPE_MODEL);
+  assert(!e->parsed && "Asset already loaded");
+
+  cgltf_options opts = {0};
+  cgltf_result result =
+      cgltf_parse(&opts, e->raw.data, e->raw.size, (cgltf_data **)&e->parsed);
+  assert(result == cgltf_result_success && "cgltf_parse failed");
+  return (cgltf_data *)e->parsed;
+}
+
+static inline ma_decoder *asset_load_audio(AssetID id) {
+  AssetEntry *e = &ASSET_TABLE[id];
+  assert(e->type == ASSET_TYPE_AUDIO);
+  assert(!e->parsed && "Asset already loaded");
+
+  e->parsed = malloc(sizeof(ma_decoder));
+  ma_result result = ma_decoder_init_memory(e->raw.data, e->raw.size, NULL,
+                                            (ma_decoder *)e->parsed);
+  assert(result == MA_SUCCESS && "miniaudio decoder init failed");
+  return (ma_decoder *)e->parsed;
+}
+
+static inline void *asset_load_bin(AssetID id) {
+  AssetEntry *e = &ASSET_TABLE[id];
+  assert(e->type == ASSET_TYPE_BIN);
+  assert(!e->parsed && "Asset already loaded");
+
+  // Binaries point directly to memory; no decoding step needed
+  e->parsed = (void *)e->raw.data;
+  return e->parsed;
+}
+
+/*
+ * ---------------------------------------------------------------
+ * API: RETRIEVAL
+ * ---------------------------------------------------------------
+ */
+static inline unsigned char *asset_get_texture(AssetID id) {
+  AssetEntry *e = &ASSET_TABLE[id];
+  assert(e->parsed && "Texture not loaded");
+  return (unsigned char *)e->parsed;
+}
+
+static inline cgltf_data *asset_get_model(AssetID id) {
+  AssetEntry *e = &ASSET_TABLE[id];
+  assert(e->parsed && "Model not loaded");
+  return (cgltf_data *)e->parsed;
+}
+
+static inline ma_decoder *asset_get_audio(AssetID id) {
+  AssetEntry *e = &ASSET_TABLE[id];
+  assert(e->parsed && "Audio not loaded");
+  return (ma_decoder *)e->parsed;
+}
+
+static inline void *asset_get_bin(AssetID id) {
+  AssetEntry *e = &ASSET_TABLE[id];
+  assert(e->parsed && "Binary not loaded");
+  return e->parsed;
+}
+
+/*
+ * ---------------------------------------------------------------
+ * API: DEALLOCATION
+ * ---------------------------------------------------------------
+ */
+static inline void asset_free(AssetID id) {
+  AssetEntry *e = &ASSET_TABLE[id];
+  if (!e->parsed)
+    return;
+
+  switch (e->type) {
+  case ASSET_TYPE_TEXTURE:
+    stbi_image_free(e->parsed);
+    break;
+  case ASSET_TYPE_MODEL:
+    cgltf_free((cgltf_data *)e->parsed);
+    break;
+  case ASSET_TYPE_AUDIO:
+    ma_decoder_uninit((ma_decoder *)e->parsed);
+    free(e->parsed);
+    break;
+  case ASSET_TYPE_RAW:
+    free(e->parsed);
+    break;
+  case ASSET_TYPE_BIN:
+    break; // No allocation performed
+  }
+  e->parsed = NULL;
+}
+
+/*
+ * ---------------------------------------------------------------
+ * BUNDLING & ITERATION
+ * ---------------------------------------------------------------
+ */
+typedef struct {
+  const AssetID *ids;
+  int count;
+} AssetBundle;
+
+typedef struct {
+  unsigned char *pixels;
+  int w, h, ch;
+} AssetTexture;
+
+typedef struct {
+  AssetBundle *bundle;
+  int index;
+  AssetID id;
+  AssetType type;
+  union {
+    AssetTexture texture;
+    cgltf_data *model;
+    ma_decoder *audio;
+    struct {
+      void *data;
+      unsigned int size;
+    } bin;
+  };
+} BundleIter;
+
+static inline void bundle_free(AssetBundle *bundle) {
+  for (int i = 0; i < bundle->count; i++)
+    asset_free(bundle->ids[i]);
+}
+
+static inline BundleIter bundle_iter(AssetBundle *bundle) {
+  BundleIter it = {0};
+  it.bundle = bundle;
+  return it;
+}
+
+static inline int bundle_iter_next(BundleIter *it) {
+  while (it->index < it->bundle->count) {
+    AssetID id = it->bundle->ids[it->index++];
+    AssetEntry *e = &ASSET_TABLE[id];
+    if (e->parsed)
+      continue;
+
+    it->id = id;
+    it->type = e->type;
+
+    switch (e->type) {
+    case ASSET_TYPE_TEXTURE:
+      it->texture.pixels = asset_load_texture(id, &it->texture.w,
+                                              &it->texture.h, &it->texture.ch);
+      return 1;
+    case ASSET_TYPE_MODEL:
+      it->model = asset_load_model(id);
+      return 1;
+    case ASSET_TYPE_AUDIO:
+      it->audio = asset_load_audio(id);
+      return 1;
+    case ASSET_TYPE_BIN:
+      it->bin.data = asset_load_bin(id);
+      it->bin.size = e->raw.size;
+      return 1;
+    default:
+      continue;
+    }
+  }
+  return 0;
+}
+
+// Helper macro for code generation
+#define ASSET_GROUP(GroupName, ...)                                            \
+  static const AssetID _##GroupName##_ids[] = {__VA_ARGS__};                   \
+  static AssetBundle GroupName##_bundle = {                                    \
+      _##GroupName##_ids, sizeof(_##GroupName##_ids) / sizeof(AssetID)};
+
+#endif // ASSET_H

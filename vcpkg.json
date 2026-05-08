@@ -1,0 +1,9 @@
+{
+  "name": "bindless-vulkan-api-test",
+  "version-string": "0.1.0",
+  "dependencies": [
+    "stb",
+    "cgltf",
+    "miniaudio"
+  ]
+}

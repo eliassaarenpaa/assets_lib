@@ -1,0 +1,92 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 21,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "base-ninja-clang",
+      "hidden": true,
+      "generator": "Ninja",
+      "cacheVariables": {
+        "CMAKE_MAKE_PROGRAM": "ninja",
+        "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/vcpkg/scripts/buildsystems/vcpkg.cmake",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "YES",
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "CMAKE_C_COMPILER_LAUNCHER": "ccache",
+        "CMAKE_CXX_COMPILER_LAUNCHER": "ccache",
+        "CMAKE_EXE_LINKER_FLAGS": "-fuse-ld=lld",
+        "CMAKE_SHARED_LINKER_FLAGS": "-fuse-ld=lld",
+        "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed",
+        "VCPKG_MANIFEST_INSTALL": false,
+        "CMAKE_COLOR_DIAGNOSTICS": "ON"
+      }
+    },
+    {
+      "name": "base-debug-ninja-clang",
+      "hidden": true,
+      "inherits": "base-ninja-clang",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_CXX_FLAGS": "-O0 -g -Xclang -gcodeview",
+        "CMAKE_C_FLAGS": "-O0 -g -Xclang -gcodeview"
+      }
+    },
+    {
+      "name": "base-release-ninja-clang",
+      "hidden": true,
+      "inherits": "base-ninja-clang",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_INTERPROCEDURAL_OPTIMIZATION": "ON",
+        "CMAKE_CXX_FLAGS": "-O3 -flto=thin -march=native",
+        "CMAKE_C_FLAGS": "-O3 -flto=thin -march=native"
+      }
+    },
+    {
+      "name": "vcpkg",
+      "generator": "Ninja",
+      "inherits": "base-ninja-clang",
+      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "architecture": {
+        "value": "x64",
+        "strategy": "external"
+      },
+      "toolset": {
+        "value": "host=x64",
+        "strategy": "external"
+      },
+      "cacheVariables": {
+        "VCPKG_TARGET_TRIPLET": "x64-windows",
+        "VCPKG_APPLOCAL_DEPS": "ON",
+        "CMAKE_EXE_LINKER_FLAGS": "",
+        "CMAKE_SHARED_LINKER_FLAGS": ""
+      }
+    },
+    {
+      "name": "debug",
+      "inherits": "vcpkg",
+      "binaryDir": "${sourceDir}/build/Debug"
+    },
+    {
+      "name": "release",
+      "inherits": "vcpkg",
+      "binaryDir": "${sourceDir}/build/Release"
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "debug",
+      "configurePreset": "debug",
+      "jobs": 0
+    },
+    {
+      "name": "release",
+      "configurePreset": "release",
+      "jobs": 0
+    }
+  ]
+}
