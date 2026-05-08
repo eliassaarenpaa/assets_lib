@@ -17,7 +17,8 @@ unsigned char *pixels = asset_load_texture(ASSET_my_texture, &w, &h, &ch);
 - [Quick Start](#quick-start)
 - [CMake API](#cmake-api)
 - [C API](#c-api)
-- [Dev Mode vs Shipping Mode](#dev-mode-vs-shipping-mode)
+- [Dev Mode vs Export Mode](#dev-mode-vs-export-mode)
+- [Build Presets](#build-presets)
 - [Supported Asset Types](#supported-asset-types)
 - [Project Layout](#project-layout)
 - [Verifying Embedding](#verifying-embedding)
@@ -27,11 +28,12 @@ unsigned char *pixels = asset_load_texture(ASSET_my_texture, &w, &h, &ch);
 
 ## Features
 
-- **Zero runtime file I/O** — assets are `#embed`-ed as byte arrays in the compiled binary
+- **Zero runtime file I/O in export builds** — assets are `#embed`-ed as byte arrays in the compiled binary
 - **Automatic type detection** — file extension maps to `ASSET_TYPE_TEXTURE`, `MODEL`, `AUDIO`, or `BIN`
 - **Generated enum IDs** — each asset gets a named constant (`ASSET_my_texture`, `ASSET_Duck`, …) usable anywhere in C
 - **Named bundles** — group related assets and iterate over them in one loop
-- **Dev-mode hot reload** — when built without `-DSHIPPING`, freed assets reload from disk on next use
+- **Dev-mode hot reload** — when built with `-DDEV=ON`, assets load from disk at runtime and reload automatically when files change
+- **Fast dev compilation** — `#embed` is skipped entirely in dev builds, so compile times stay short
 - **Single header API** — include `<assets.h>` and you're done
 
 ---
@@ -46,7 +48,7 @@ unsigned char *pixels = asset_load_texture(ASSET_my_texture, &w, &h, &ch);
 | Clang | 19+ |
 | MSVC | Not yet supported (`#embed` support pending) |
 
-> **Note:** C23 is non-negotiable. `#embed` is a C23 feature and the library will not compile under C17 or earlier.
+> **Note:** C23 is non-negotiable. `#embed` is a C23 feature and the library will not compile under C17 or earlier. Dev builds do not use `#embed` and compile faster as a result.
 
 ---
 
@@ -102,6 +104,11 @@ set(CMAKE_C_STANDARD 23)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
 add_subdirectory(vendor/assets_lib)
+
+option(DEV "Development mode with hot-reloading" OFF)
+if(DEV)
+    target_compile_definitions(assets PUBLIC DEV)
+endif()
 
 add_executable(my_game main.c)
 target_link_libraries(my_game PRIVATE assets)
@@ -174,6 +181,17 @@ int main(void) {
     bundle_iter it2 = asset_bundle_iter(&StartupAssets_bundle);
     // ... same loop as above
     bundle_free(&StartupAssets_bundle);
+
+    // ── Hot reload (dev mode only) ───────────────────────────────────────
+
+#ifdef DEV
+    while (running) {
+        asset_dev_poll();  // checks file timestamps, frees changed assets
+        // next asset_load_* call re-reads from disk automatically
+        pixels = asset_load_texture(ASSET_player, &w, &h, &ch);
+        render(pixels);
+    }
+#endif
 
     return 0;
 }
@@ -248,7 +266,7 @@ cgltf_data *asset_load_model(asset_id id);
 ma_decoder *asset_load_audio(asset_id id);
 ```
 
-All three functions are lazy — the raw bytes are already in the binary, but parsing happens on first call.
+All three functions are lazy — in export builds the raw bytes are already in the binary but parsing happens on first call. In dev builds the file is read from disk on first call (or after a hot reload).
 
 ---
 
@@ -258,7 +276,7 @@ All three functions are lazy — the raw bytes are already in the binary, but pa
 void asset_free(asset_id id);
 ```
 
-Frees the parsed representation (`stbi_image_free`, `cgltf_free`, `ma_decoder_uninit`). In dev mode (see below) also discards the raw data so the next load re-reads from disk.
+Frees the parsed representation (`stbi_image_free`, `cgltf_free`, `ma_decoder_uninit`). In dev mode also discards the raw data so the next load re-reads from disk.
 
 ---
 
@@ -290,6 +308,18 @@ it.audio           // ma_decoder*
 
 ---
 
+### Hot reload (dev mode only)
+
+```c
+#ifdef DEV
+void asset_dev_poll(void);
+#endif
+```
+
+Call once per frame. Checks the last-modified timestamp of every asset file on disk. If a file has changed since the last poll, the asset is freed automatically — the next `asset_load_*` call will re-read and decode the updated file. No manual reload calls needed.
+
+---
+
 ### Ad-hoc groups (C macro)
 
 Define a bundle inline in C without touching CMake:
@@ -302,29 +332,45 @@ bundle_iter it = asset_bundle_iter(&StartupAssets_bundle);
 
 ---
 
-## Dev Mode vs Shipping Mode
+## Dev Mode vs Export Mode
 
-The library has two runtime behaviours controlled by the `SHIPPING` preprocessor macro.
+Behaviour is controlled by the `DEV` preprocessor macro, set via the CMake `DEV` option.
 
-| | Dev mode (default) | Shipping mode |
+| | Dev mode (`-DDEV=ON`) | Export mode (default) |
 |---|---|---|
-| Asset source | `#embed` bytes in binary | `#embed` bytes in binary |
-| After `asset_free` | Raw bytes discarded; next load re-reads from disk | Raw bytes kept |
-| Use case | Iterate fast, hot-reload textures | Final build, no disk access |
+| Asset source | Loaded from disk at runtime | `#embed` bytes baked into binary |
+| `#embed` compiled | No — fast builds | Yes |
+| After `asset_free` | Raw bytes discarded; next load re-reads from disk | Parsed data freed; raw bytes kept |
+| Hot reload | Yes — `asset_dev_poll()` watches file timestamps | No |
+| Disk dependency at runtime | Yes — asset source paths are absolute | None |
+| Use case | Development iteration | Shipping to players |
 
-To build in shipping mode:
+The `DEV` define is set as `PUBLIC` on the `assets` target, so it automatically propagates to any target that links against `assets` — no need to set it manually on your game target.
 
-```cmake
-target_compile_definitions(my_game PRIVATE SHIPPING)
-```
+---
 
-Or globally:
+## Build Presets
+
+The included `CMakePresets.json` provides four presets:
+
+| Preset | `DEV` | Optimisation | Debug symbols |
+|---|---|---|---|
+| `dev-debug` | On | None (`-O0`) | Yes |
+| `dev-release` | On | Full (`-O3`, LTO) | No |
+| `export-debug` | Off | None (`-O0`) | Yes |
+| `export-release` | Off | Full (`-O3`, LTO) | No |
 
 ```bash
-cmake -B build -DCMAKE_C_FLAGS="-DSHIPPING"
+# Configure
+cmake --preset dev-debug
+cmake --preset export-release
+
+# Build
+cmake --build --preset dev-debug
+cmake --build --preset export-release
 ```
 
-> In shipping mode the `raw.path` fallback in `ensure_raw_data` is never reached because `raw.data` is always non-NULL (set by `#embed`). The `path` field exists solely for dev-mode disk reloads.
+All presets use Clang + Ninja + ccache + LLD and expect vcpkg at `${sourceDir}/vcpkg`.
 
 ---
 
@@ -341,7 +387,8 @@ For `BIN` assets, access the raw bytes manually:
 
 ```c
 asset_entry *e = &ASSET_TABLE[ASSET_config];
-// e->raw.data and e->raw.size are always populated for embedded assets
+// export: e->raw.data and e->raw.size are always populated
+// dev:    call asset_load_* first to trigger disk read
 my_config_parse(e->raw.data, e->raw.size);
 ```
 
@@ -352,6 +399,7 @@ my_config_parse(e->raw.data, e->raw.size);
 ```
 assets_lib/
 ├── CMakeLists.txt          # Library build definition
+├── CMakePresets.json       # dev-debug / dev-release / export-debug / export-release
 ├── vcpkg.json              # Dependency manifest (stb, cgltf, miniaudio)
 ├── cmake/
 │   └── assets.cmake        # embed_assets / embed_asset_bundle / generate_assets_file
@@ -374,7 +422,7 @@ Generated at build time (do not edit):
 ```
 build/generated/
 ├── assets_generated.h   # Enum constants + bundle externs
-└── assets_generated.c   # #embed byte arrays + ASSET_TABLE + bundle definitions
+└── assets_generated.c   # Byte arrays / path strings + ASSET_TABLE + bundle definitions
 ```
 
 ---
@@ -392,7 +440,7 @@ xxd my_game | grep "4f676700"    # OggS  — confirms an OGG is embedded
 
 ```bash
 mv assets/texture_01.png /tmp/texture_01.png.bak
-./my_game   # should succeed
+./my_game   # should succeed (export build only)
 mv /tmp/texture_01.png.bak assets/texture_01.png
 ```
 
