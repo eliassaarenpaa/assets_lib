@@ -12,14 +12,6 @@ option(DEV "Development mode" OFF)
 option(ASSETS_BUILD_EXAMPLES "Build examples" ON)
 
 # -------------------------------------------------
-# 1. Setup Generated Paths & Directory
-# -------------------------------------------------
-set(GEN_DIR "${CMAKE_BINARY_DIR}/generated")
-set(GEN_ASSET_SRC "${GEN_DIR}/assets_generated.c")
-file(MAKE_DIRECTORY "${GEN_DIR}")
-file(TOUCH "${GEN_ASSET_SRC}")
-
-# -------------------------------------------------
 # 2. Dependencies
 # -------------------------------------------------
 find_path(CGLTF_INCLUDE_DIRS "cgltf.h")
@@ -37,7 +29,6 @@ include(cmake/assets.cmake)
 add_library(assets
     src/assets.c
     src/third_party_impl.c
-    "${GEN_ASSET_SRC}"
 )
 
 target_include_directories(assets
@@ -48,6 +39,8 @@ PUBLIC
     ${MINIAUDIO_INCLUDE_DIRS}
     ${Stb_INCLUDE_DIR}
 )
+
+
 
 if(DEV)
   target_compile_definitions(assets PUBLIC DEV)

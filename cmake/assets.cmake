@@ -1,117 +1,224 @@
+# -----------------------------------------------------------------------------
+# assets.cmake (refactored)
+# -----------------------------------------------------------------------------
+
 include_guard(GLOBAL)
 
-set_property(GLOBAL PROPERTY ASSET_ENUM_ENTRIES "")
-set_property(GLOBAL PROPERTY ASSET_TABLE_ENTRIES "")
-set_property(GLOBAL PROPERTY ASSET_EMBED_BLOCKS "")
-set_property(GLOBAL PROPERTY ASSET_BUNDLE_NAMES "")
+# -----------------------------------------------------------------------------
+# Helpers
+# -----------------------------------------------------------------------------
 
-function(_asset_type_from_ext ASSET_PATH OUT_TYPE)
-  get_filename_component(EXT "${ASSET_PATH}" EXT)
-  string(TOLOWER "${EXT}" EXT)
-  if(EXT MATCHES "\\.(png|jpg|jpeg)")
-    set(${OUT_TYPE} "TEXTURE" PARENT_SCOPE)
-  elseif(EXT MATCHES "\\.(glb|gltf)")
-    set(${OUT_TYPE} "MODEL" PARENT_SCOPE)
-  elseif(EXT MATCHES "\\.(ogg|wav|mp3)")
-    set(${OUT_TYPE} "AUDIO" PARENT_SCOPE)
+function(_sanitize_identifier INPUT OUTPUT)
+  get_filename_component(_name "${INPUT}" NAME_WE)
+  string(REGEX REPLACE "[^A-Za-z0-9_]" "_" _name "${_name}")
+  set(${OUTPUT} "${_name}" PARENT_SCOPE)
+endfunction()
+
+function(_asset_type_from_extension PATH OUTPUT)
+  get_filename_component(_ext "${PATH}" EXT)
+  string(TOLOWER "${_ext}" _ext)
+
+  if(_ext MATCHES "\\.(png|jpg|jpeg|bmp|tga|gif)$")
+    set(_type "ASSET_TYPE_TEXTURE")
+  elseif(_ext MATCHES "\\.(glb|gltf)$")
+    set(_type "ASSET_TYPE_MODEL")
+  elseif(_ext MATCHES "\\.(ogg|wav|mp3|flac)$")
+    set(_type "ASSET_TYPE_AUDIO")
   else()
-    set(${OUT_TYPE} "BIN" PARENT_SCOPE)
+    set(_type "ASSET_TYPE_BIN")
   endif()
+
+  set(${OUTPUT} "${_type}" PARENT_SCOPE)
 endfunction()
 
-function(_register_asset ASSET_PATH OUT_ENUM_NAME)
-  _asset_type_from_ext("${ASSET_PATH}" TYPE)
-  get_filename_component(ASSET_NAME "${ASSET_PATH}" NAME_WLE)
-  get_filename_component(ABS_PATH   "${ASSET_PATH}" ABSOLUTE)
-  file(TO_CMAKE_PATH "${ABS_PATH}" CLEAN_PATH)
+function(_asset_add TARGET PATH)
+  get_target_property(_list ${TARGET} ASSETS_REGISTERED)
+  if(NOT _list)
+    set(_list "")
+  endif()
 
-  # Enum entry
-  set_property(GLOBAL APPEND_STRING PROPERTY ASSET_ENUM_ENTRIES
-    "    ASSET_${ASSET_NAME},\n")
-
-  # Embed block:
-  #   DEV    — only the path string, no binary data (loaded from disk at runtime)
-  #   export — binary data via #embed, no path string
-  set(EMBED_STR "#ifdef DEV\n")
-  string(APPEND EMBED_STR "const char g_${ASSET_NAME}_path[] = \"${CLEAN_PATH}\";\n")
-  string(APPEND EMBED_STR "#else\n")
-  string(APPEND EMBED_STR "const unsigned char g_${ASSET_NAME}_data[] = {\n")
-  string(APPEND EMBED_STR "    #embed \"${CLEAN_PATH}\"\n")
-  string(APPEND EMBED_STR "};\n")
-  string(APPEND EMBED_STR "const unsigned int g_${ASSET_NAME}_size = sizeof(g_${ASSET_NAME}_data);\n")
-  string(APPEND EMBED_STR "#endif\n\n")
-  set_property(GLOBAL APPEND_STRING PROPERTY ASSET_EMBED_BLOCKS "${EMBED_STR}")
-
-  # Table entry:
-  #   DEV    — NULL/0 for data/size, path set (loaded from disk at runtime)
-  #   export — embedded data/size, NULL path
-  set(TABLE_ENTRY "#ifdef DEV\n")
-  string(APPEND TABLE_ENTRY "    [ASSET_${ASSET_NAME}] = { ASSET_TYPE_${TYPE}, { NULL, 0, g_${ASSET_NAME}_path } },\n")
-  string(APPEND TABLE_ENTRY "#else\n")
-  string(APPEND TABLE_ENTRY "    [ASSET_${ASSET_NAME}] = { ASSET_TYPE_${TYPE}, { g_${ASSET_NAME}_data, g_${ASSET_NAME}_size, NULL } },\n")
-  string(APPEND TABLE_ENTRY "#endif\n")
-  set_property(GLOBAL APPEND_STRING PROPERTY ASSET_TABLE_ENTRIES "${TABLE_ENTRY}")
-
-  set(${OUT_ENUM_NAME} "ASSET_${ASSET_NAME}" PARENT_SCOPE)
+  list(APPEND _list "${PATH}")
+  set_target_properties(${TARGET} PROPERTIES ASSETS_REGISTERED "${_list}")
 endfunction()
+
+# -----------------------------------------------------------------------------
+# Public API
+# -----------------------------------------------------------------------------
 
 function(embed_assets TARGET)
-  foreach(ASSET_PATH IN LISTS ARGN)
-    _register_asset("${ASSET_PATH}" _UNUSED)
+  foreach(PATH IN LISTS ARGN)
+    _asset_add(${TARGET} "${PATH}")
   endforeach()
 endfunction()
 
-function(embed_asset_bundle BUNDLE_NAME)
-  set(BUNDLE_ID_LIST "")
+function(embed_asset_bundle TARGET BUNDLE_NAME)
+  set(_assets "${ARGN}")
 
-  foreach(ASSET_PATH IN LISTS ARGN)
-    _register_asset("${ASSET_PATH}" ENUM_NAME)
-    list(APPEND BUNDLE_ID_LIST "${ENUM_NAME}")
+  foreach(PATH IN LISTS _assets)
+    _asset_add(${TARGET} "${PATH}")
   endforeach()
 
-  get_property(EXISTING_NAMES GLOBAL PROPERTY ASSET_BUNDLE_NAMES)
-  if("${BUNDLE_NAME}" IN_LIST EXISTING_NAMES)
-    message(FATAL_ERROR "embed_asset_bundle: bundle '${BUNDLE_NAME}' registered twice.")
+  get_target_property(_bundles ${TARGET} ASSET_BUNDLES)
+  if(NOT _bundles)
+    set(_bundles "")
   endif()
 
-  set_property(GLOBAL APPEND PROPERTY ASSET_BUNDLE_NAMES "${BUNDLE_NAME}")
-  set_property(GLOBAL PROPERTY "ASSET_BUNDLE_${BUNDLE_NAME}_IDS" "${BUNDLE_ID_LIST}")
+  list(APPEND _bundles "${BUNDLE_NAME}")
+
+  set_target_properties(${TARGET} PROPERTIES
+    ASSET_BUNDLES "${_bundles}"
+    ASSET_BUNDLE_${BUNDLE_NAME} "${_assets}"
+  )
 endfunction()
 
-function(generate_assets_file)
-  get_property(ENUM_VAL     GLOBAL PROPERTY ASSET_ENUM_ENTRIES)
-  get_property(TABL_VAL     GLOBAL PROPERTY ASSET_TABLE_ENTRIES)
-  get_property(EMBD_VAL     GLOBAL PROPERTY ASSET_EMBED_BLOCKS)
-  get_property(BUNDLE_NAMES GLOBAL PROPERTY ASSET_BUNDLE_NAMES)
+# -----------------------------------------------------------------------------
+# Generate
+# -----------------------------------------------------------------------------
 
-  file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/generated")
+function(generate_assets_file TARGET)
+  if(NOT TARGET ${TARGET})
+    message(FATAL_ERROR "Target '${TARGET}' does not exist")
+  endif()
 
-  # ── Header ───────────────────────────────────────────────────────────────
-  set(HEADER_CONTENT
-"#pragma once
-enum {
-${ENUM_VAL}    ASSET_COUNT
-};
-")
+  get_target_property(_assets ${TARGET} ASSETS_REGISTERED)
+  if(NOT _assets)
+    message(STATUS "No assets for ${TARGET}")
+    return()
+  endif()
 
-  foreach(BNAME IN LISTS BUNDLE_NAMES)
-    string(APPEND HEADER_CONTENT "extern asset_bundle ${BNAME}_bundle;\n")
+  list(REMOVE_DUPLICATES _assets)
+
+  set(GEN_DIR "${CMAKE_BINARY_DIR}/generated/assets/${TARGET}")
+  file(MAKE_DIRECTORY "${GEN_DIR}")
+
+  set(GEN_H "${GEN_DIR}/assets_generated.h")
+  set(GEN_C "${GEN_DIR}/assets_generated.c")
+  set(GEN_WRAP "${GEN_DIR}/assets.h")
+
+  # -------------------------------------------------------------------------
+  # Buffers
+  # -------------------------------------------------------------------------
+
+  set(ENUMS "")
+  set(TABLES "")
+  set(EMBEDS "")
+
+  # track emitted embed symbols (avoid duplicates)
+  set(_EMBED_TRACK "")
+
+  foreach(PATH IN LISTS _assets)
+
+    get_filename_component(ABS "${PATH}" ABSOLUTE)
+    file(TO_CMAKE_PATH "${ABS}" PATH_NORM)
+
+    _sanitize_identifier("${PATH_NORM}" ID)
+    _asset_type_from_extension("${PATH_NORM}" TYPE)
+
+    string(APPEND ENUMS "    ASSET_${ID},\n")
+
+    if(DEFINED DEV AND DEV)
+      string(APPEND TABLES
+        "    { .type = ${TYPE}, .raw = { .path = \"${PATH_NORM}\" } },\n"
+      )
+    else()
+
+      # embed symbols
+      set(DATA "asset_${ID}_data")
+      set(SIZE "asset_${ID}_size")
+
+      string(APPEND TABLES
+        "    { .type = ${TYPE}, .raw = { .data = ${DATA}, .size = ${SIZE} } },\n"
+      )
+
+      # ensure single emission
+      if(NOT ID IN_LIST _EMBED_TRACK)
+        list(APPEND _EMBED_TRACK ${ID})
+
+        string(APPEND EMBEDS
+          "static const unsigned char ${DATA}[] = {\n"
+          "    #embed \"${PATH_NORM}\"\n"
+          "};\n"
+          "static const unsigned int ${SIZE} = sizeof(${DATA});\n\n"
+        )
+      endif()
+
+    endif()
+
   endforeach()
 
-  file(WRITE "${CMAKE_BINARY_DIR}/generated/assets_generated.h" "${HEADER_CONTENT}")
+  string(APPEND ENUMS "    ASSET_COUNT\n")
 
-  # ── Source ────────────────────────────────────────────────────────────────
-  set(GEN_C_FILE "${CMAKE_BINARY_DIR}/generated/assets_generated.c")
-  file(WRITE  "${GEN_C_FILE}" "#include <assets.h>\n#include \"assets_generated.h\"\n\n")
-  file(APPEND "${GEN_C_FILE}" "${EMBD_VAL}")
-  file(APPEND "${GEN_C_FILE}" "asset_entry ASSET_TABLE[ASSET_COUNT > 0 ? ASSET_COUNT : 1] = {\n${TABL_VAL}};\n")
+  # -------------------------------------------------------------------------
+  # Header
+  # -------------------------------------------------------------------------
 
-  foreach(BNAME IN LISTS BUNDLE_NAMES)
-    get_property(BIDS GLOBAL PROPERTY "ASSET_BUNDLE_${BNAME}_IDS")
-    list(LENGTH BIDS BCOUNT)
-    string(JOIN ", " BIDS_CSV ${BIDS})
-    file(APPEND "${GEN_C_FILE}"
-"\nstatic const asset_id _${BNAME}_ids[${BCOUNT}] = { ${BIDS_CSV} };
-asset_bundle ${BNAME}_bundle = { _${BNAME}_ids, ${BCOUNT} };\n")
-  endforeach()
+  file(WRITE "${GEN_H}" "#pragma once\n\n#include <assets.h>\n\n")
+
+  file(APPEND "${GEN_H}" "enum {\n${ENUMS}};\n\n")
+  file(APPEND "${GEN_H}" "extern asset_entry ASSET_TABLE[ASSET_COUNT];\n\n")
+
+  # bundles
+  get_target_property(_bundles ${TARGET} ASSET_BUNDLES)
+  if(_bundles)
+    foreach(B IN LISTS _bundles)
+      file(APPEND "${GEN_H}" "extern asset_bundle ${B}_bundle;\n")
+    endforeach()
+    file(APPEND "${GEN_H}" "\n")
+  endif()
+
+  # wrapper
+  file(WRITE "${GEN_WRAP}" "#pragma once\n\n#include <assets_base.h>\n#include \"assets_generated.h\"\n")
+
+  # -------------------------------------------------------------------------
+  # Source
+  # -------------------------------------------------------------------------
+
+  file(WRITE "${GEN_C}" "#include \"assets_generated.h\"\n\n")
+
+  file(APPEND "${GEN_C}" "${EMBEDS}\n")
+
+  file(APPEND "${GEN_C}"
+    "asset_entry ASSET_TABLE[ASSET_COUNT] = {\n"
+    "${TABLES}"
+    "};\n\n"
+  )
+
+  file(APPEND "${GEN_C}" "time_t _asset_mtimes[ASSET_COUNT];\n\n")
+  file(APPEND "${GEN_C}" "const int ASSET_COUNT_VALUE = ASSET_COUNT;\n\n")
+
+  # -------------------------------------------------------------------------
+  # Bundles
+  # -------------------------------------------------------------------------
+
+  if(_bundles)
+    foreach(B IN LISTS _bundles)
+
+      get_target_property(_assets_bundle ${TARGET} ASSET_BUNDLE_${B})
+
+      set(_ids "")
+      foreach(PATH IN LISTS _assets_bundle)
+        _sanitize_identifier("${PATH}" ID)
+        string(APPEND _ids "    ASSET_${ID},\n")
+      endforeach()
+
+      list(LENGTH _assets_bundle CNT)
+
+      file(APPEND "${GEN_C}"
+        "static asset_id ${B}_ids[] = {\n${_ids}};\n\n"
+        "asset_bundle ${B}_bundle = {\n"
+        "    .ids = ${B}_ids,\n"
+        "    .count = ${CNT}\n"
+        "};\n\n"
+      )
+
+    endforeach()
+  endif()
+
+  # -------------------------------------------------------------------------
+  # Attach
+  # -------------------------------------------------------------------------
+
+  target_sources(${TARGET} PRIVATE "${GEN_C}")
+  target_include_directories(${TARGET} PUBLIC "${GEN_DIR}")
+
 endfunction()

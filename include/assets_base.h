@@ -1,6 +1,8 @@
 #ifndef ASSETS_H
 #define ASSETS_H
+
 #include <stddef.h>
+#include <time.h>
 // Forward declarations
 typedef struct cgltf_data cgltf_data;
 typedef struct ma_decoder ma_decoder;
@@ -21,9 +23,16 @@ typedef struct {
   asset_type type;
   asset_data raw;
   void *parsed;
+#ifdef DEV
+  int generation;
+#endif
 } asset_entry;
 typedef int asset_id;
+
 extern asset_entry ASSET_TABLE[];
+extern const int ASSET_COUNT_VALUE;
+extern time_t _asset_mtimes[];
+
 // API
 unsigned char *asset_load_texture(asset_id id, int *w, int *h, int *ch);
 cgltf_data *asset_load_model(asset_id id);
@@ -54,5 +63,8 @@ typedef struct {
 bundle_iter asset_bundle_iter(asset_bundle *bundle);
 int asset_bundle_iter_next(bundle_iter *it);
 void bundle_free(asset_bundle *bundle);
-#include "assets_generated.h"
+
+#ifdef DEV
+void asset_dev_poll(void);
+#endif
 #endif
