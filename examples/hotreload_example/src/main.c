@@ -3,6 +3,7 @@
 #include <assets.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 // Simulates your game using an asset — prints basic info about it.
 // In a real game this would upload to GPU, play audio, etc.
@@ -36,49 +37,60 @@ static void load_model(asset_id id) {
   printf("[model]   %zu mesh(es)\n", model->meshes_count);
 }
 
+static void load_shader(asset_id id) {
+  shader_t *shader = asset_load_shader(id);
+  if (!shader) {
+    fprintf(stderr, "[example] failed to load shader %d\n", id);
+    return;
+  }
+  printf("[shader]   reflect bytes: %zu\n",
+         shader ? strlen(shader->reflect) : 0);
+}
+
+#ifdef DEV
+extern void dev_on_asset_changed(asset_type type, asset_id id) {
+  asset_free(id);
+  switch (type) {
+  case ASSET_TYPE_SHADER:
+    load_shader(id);
+    break;
+  case ASSET_TYPE_TEXTURE:
+    load_texture(id);
+    break;
+  case ASSET_TYPE_MODEL:
+    load_model(id);
+    break;
+  case ASSET_TYPE_AUDIO:
+    load_audio(id);
+    break;
+  case ASSET_TYPE_BIN:
+    break;
+  }
+}
+#endif
+
 int main(void) {
 #ifdef DEV
   printf("assets_lib hot-reload example (DEV)n");
   printf("Edit any asset file on disk and watch it reload.\n");
-  printf("Press ENTER to poll for changes, q+ENTER to quit.\n\n");
 
   // Initial load — reads from disk in DEV mode
   load_texture(ASSET_texture_01);
   load_audio(ASSET_click_001);
   load_model(ASSET_Duck);
+  load_shader(ASSET_hello_world);
 
   printf("\n");
 
-  char buf[8];
-  while (1) {
-    // In a real game loop this would be called once per frame with no
-    // blocking — here we block on input so the example is easy to drive
-    // manually without a render loop.
-    printf("[ press ENTER to poll, q to quit ]\n");
-    if (!fgets(buf, sizeof(buf), stdin))
-      break;
-    if (buf[0] == 'q')
-      break;
-
-    // Check every registered asset's file timestamp.
-    // Any asset whose file changed on disk since the last poll is freed
-    // automatically — the next asset_load_* call re-reads it.
-    asset_dev_poll();
-
-    // Re-load all assets. If nothing changed, the cached parsed pointer
-    // is returned immediately. If asset_dev_poll freed an asset becaload
-    // its file changed, this re-reads and re-decodes it from disk.
-    load_texture(ASSET_texture_01);
-    load_audio(ASSET_click_001);
-    load_model(ASSET_Duck);
-
-    printf("\n");
+  while (true) {
+    dev_poll_asset_changes();
   }
 
   // Clean up
   asset_free(ASSET_texture_01);
   asset_free(ASSET_click_001);
   asset_free(ASSET_Duck);
+  asset_free(ASSET_hello_world);
 
 #else
   printf("assets_lib hot-reload example (export)\n");
@@ -87,12 +99,14 @@ int main(void) {
   load_texture(ASSET_texture_01);
   load_audio(ASSET_click_001);
   load_model(ASSET_Duck);
+  load_shader(ASSET_hello_world);
 
   asset_free(ASSET_texture_01);
   asset_free(ASSET_click_001);
   asset_free(ASSET_Duck);
+  asset_free(ASSET_hello_world);
 #endif
 
   printf("\nDone.\n");
-  // return 0;
+  return 0;
 }

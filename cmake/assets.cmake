@@ -24,6 +24,8 @@ function(_asset_type_from_extension PATH OUTPUT)
     set(_type "ASSET_TYPE_MODEL")
   elseif(_ext MATCHES "\\.(ogg|wav|mp3|flac)$")
     set(_type "ASSET_TYPE_AUDIO")
+  elseif(_ext MATCHES "\\.(slang)$")
+    set(_type "ASSET_TYPE_SHADER")
   else()
     set(_type "ASSET_TYPE_BIN")
   endif()
@@ -91,9 +93,19 @@ function(generate_assets_file TARGET)
   set(GEN_DIR "${CMAKE_BINARY_DIR}/generated/assets/${TARGET}")
   file(MAKE_DIRECTORY "${GEN_DIR}")
 
-  set(GEN_H "${GEN_DIR}/assets_generated.h")
-  set(GEN_C "${GEN_DIR}/assets_generated.c")
+  set(GEN_H    "${GEN_DIR}/assets_generated.h")
+  set(GEN_C    "${GEN_DIR}/assets_generated.c")
   set(GEN_WRAP "${GEN_DIR}/assets.h")
+
+  # -------------------------------------------------------------------------
+  # Locate slangc once — outside the loop
+  # -------------------------------------------------------------------------
+
+  find_program(SLANGC slangc REQUIRED)
+  message(STATUS "slangc found: ${SLANGC}")
+  target_compile_definitions(assets PRIVATE
+    SLANGC_PATH="${SLANGC}"
+  )
 
   # -------------------------------------------------------------------------
   # Buffers
@@ -102,8 +114,6 @@ function(generate_assets_file TARGET)
   set(ENUMS "")
   set(TABLES "")
   set(EMBEDS "")
-
-  # track emitted embed symbols (avoid duplicates)
   set(_EMBED_TRACK "")
 
   foreach(PATH IN LISTS _assets)
@@ -117,31 +127,90 @@ function(generate_assets_file TARGET)
     string(APPEND ENUMS "    ASSET_${ID},\n")
 
     if(DEFINED DEV AND DEV)
-      string(APPEND TABLES
-        "    { .type = ${TYPE}, .raw = { .path = \"${PATH_NORM}\" } },\n"
-      )
-    else()
-
-      # embed symbols
-      set(DATA "asset_${ID}_data")
-      set(SIZE "asset_${ID}_size")
-
-      string(APPEND TABLES
-        "    { .type = ${TYPE}, .raw = { .data = ${DATA}, .size = ${SIZE} } },\n"
-      )
-
-      # ensure single emission
-      if(NOT ID IN_LIST _EMBED_TRACK)
-        list(APPEND _EMBED_TRACK ${ID})
-
-        string(APPEND EMBEDS
-          "static const unsigned char ${DATA}[] = {\n"
-          "    #embed \"${PATH_NORM}\"\n"
-          "};\n"
-          "static const unsigned int ${SIZE} = sizeof(${DATA});\n\n"
+      # ── DEV mode ────────────────────────────────────────────────────────
+      if(TYPE STREQUAL "ASSET_TYPE_SHADER")
+        string(APPEND TABLES
+          "    { .type = ${TYPE}, .shader = { .slang_path = \"${PATH_NORM}\" } },\n"
+        )
+      else()
+        string(APPEND TABLES
+          "    { .type = ${TYPE}, .raw = { .path = \"${PATH_NORM}\" } },\n"
         )
       endif()
 
+    else()
+      # ── RELEASE mode ────────────────────────────────────────────────────
+      if(TYPE STREQUAL "ASSET_TYPE_SHADER")
+
+        set(SHADER_DIR "${GEN_DIR}/shaders")
+        file(MAKE_DIRECTORY "${SHADER_DIR}")
+
+        set(BLOB_OUT "${SHADER_DIR}/${ID}.blob")
+        set(JSON_OUT "${SHADER_DIR}/${ID}.reflect.json")
+
+        set(BLOB_DATA "asset_${ID}_blob")
+        set(BLOB_SIZE "asset_${ID}_blob_size")
+        set(JSON_DATA "asset_${ID}_reflect")
+
+        # ── Build-time shader compilation ──────────────────────────────
+        # Paths are known at configure time; files are produced at build
+        # time before the C compiler processes the #embed directives.
+        add_custom_command(
+          OUTPUT  "${BLOB_OUT}" "${JSON_OUT}"
+          DEPENDS "${PATH_NORM}"
+          COMMAND "${SLANGC}" "${PATH_NORM}"
+                  -target ${SLANG_TARGET}
+                  -o      "${BLOB_OUT}"
+                  -reflection-json "${JSON_OUT}"
+          COMMENT "Compiling shader ${ID}"
+          VERBATIM
+        )
+
+        # Drive the custom command by attaching its outputs as sources
+        # on a per-shader target, then make the assets library depend on it
+        add_custom_target(shader_${ID}_compile
+          DEPENDS "${BLOB_OUT}" "${JSON_OUT}"
+        )
+        add_dependencies(assets shader_${ID}_compile)
+
+        string(APPEND TABLES
+          "    { .type = ${TYPE}, .shader = { .data = { .blob = ${BLOB_DATA}, .blob_size = ${BLOB_SIZE}, .reflect = (const char *)${JSON_DATA} } } },\n"
+        )
+
+        if(NOT ID IN_LIST _EMBED_TRACK)
+          list(APPEND _EMBED_TRACK ${ID})
+          string(APPEND EMBEDS
+            "static const unsigned char ${BLOB_DATA}[] = {\n"
+            "    #embed \"${BLOB_OUT}\"\n"
+            "};\n"
+            "static const unsigned int ${BLOB_SIZE} = sizeof(${BLOB_DATA});\n"
+            "static const unsigned char ${JSON_DATA}[] = {\n"
+            "    #embed \"${JSON_OUT}\"\n"
+            "    , 0\n"
+            "};\n\n"
+          )
+        endif()
+
+      else()
+        # ── All other asset types — single #embed ──────────────────────
+        set(DATA "asset_${ID}_data")
+        set(SIZE "asset_${ID}_size")
+
+        string(APPEND TABLES
+          "    { .type = ${TYPE}, .raw = { .data = ${DATA}, .size = ${SIZE} } },\n"
+        )
+
+        if(NOT ID IN_LIST _EMBED_TRACK)
+          list(APPEND _EMBED_TRACK ${ID})
+          string(APPEND EMBEDS
+            "static const unsigned char ${DATA}[] = {\n"
+            "    #embed \"${PATH_NORM}\"\n"
+            "};\n"
+            "static const unsigned int ${SIZE} = sizeof(${DATA});\n\n"
+          )
+        endif()
+
+      endif()
     endif()
 
   endforeach()
@@ -153,11 +222,9 @@ function(generate_assets_file TARGET)
   # -------------------------------------------------------------------------
 
   file(WRITE "${GEN_H}" "#pragma once\n\n#include <assets.h>\n\n")
-
   file(APPEND "${GEN_H}" "enum {\n${ENUMS}};\n\n")
   file(APPEND "${GEN_H}" "extern asset_entry ASSET_TABLE[ASSET_COUNT];\n\n")
 
-  # bundles
   get_target_property(_bundles ${TARGET} ASSET_BUNDLES)
   if(_bundles)
     foreach(B IN LISTS _bundles)
@@ -166,23 +233,21 @@ function(generate_assets_file TARGET)
     file(APPEND "${GEN_H}" "\n")
   endif()
 
-  # wrapper
-  file(WRITE "${GEN_WRAP}" "#pragma once\n\n#include <assets_base.h>\n#include \"assets_generated.h\"\n")
+  file(WRITE "${GEN_WRAP}"
+    "#pragma once\n\n#include <assets_base.h>\n#include \"assets_generated.h\"\n"
+  )
 
   # -------------------------------------------------------------------------
   # Source
   # -------------------------------------------------------------------------
 
-  file(WRITE "${GEN_C}" "#include \"assets_generated.h\"\n\n")
-
+  file(WRITE  "${GEN_C}" "#include \"assets_generated.h\"\n\n")
   file(APPEND "${GEN_C}" "${EMBEDS}\n")
-
   file(APPEND "${GEN_C}"
     "asset_entry ASSET_TABLE[ASSET_COUNT] = {\n"
     "${TABLES}"
     "};\n\n"
   )
-
   file(APPEND "${GEN_C}" "time_t _asset_mtimes[ASSET_COUNT];\n\n")
   file(APPEND "${GEN_C}" "const int ASSET_COUNT_VALUE = ASSET_COUNT;\n\n")
 
@@ -192,7 +257,6 @@ function(generate_assets_file TARGET)
 
   if(_bundles)
     foreach(B IN LISTS _bundles)
-
       get_target_property(_assets_bundle ${TARGET} ASSET_BUNDLE_${B})
 
       set(_ids "")
@@ -210,7 +274,6 @@ function(generate_assets_file TARGET)
         "    .count = ${CNT}\n"
         "};\n\n"
       )
-
     endforeach()
   endif()
 

@@ -10,6 +10,7 @@ target_link_libraries(hotreload_example PRIVATE
 
 embed_assets(hotreload_example
     ../assets/texture_01.png
+    ../assets/hello-world.slang
 )
 
 embed_asset_bundle(hotreload_example test

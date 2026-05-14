@@ -4,6 +4,7 @@
   "dependencies": [
     "stb",
     "cgltf",
-    "miniaudio"
+    "miniaudio",
+	"shader-slang"
   ]
 }

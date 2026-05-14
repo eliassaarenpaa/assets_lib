@@ -11,12 +11,22 @@ endif()
 option(DEV "Development mode" OFF)
 option(ASSETS_BUILD_EXAMPLES "Build examples" ON)
 
+set(RENDERER "VULKAN")
+if(RENDERER STREQUAL "VULKAN")
+  set(SLANG_TARGET "spirv")
+elseif(RENDERER STREQUAL "METAL")
+  set(SLANG_TARGET "metallib")
+elseif(RENDERER STREQUAL "DIRECTX")
+  set(SLANG_TARGET "dxil")
+endif()
+
 # -------------------------------------------------
 # 2. Dependencies
 # -------------------------------------------------
 find_path(CGLTF_INCLUDE_DIRS "cgltf.h")
 find_path(MINIAUDIO_INCLUDE_DIRS "miniaudio.h")
 find_package(Stb REQUIRED)
+find_package(slang CONFIG REQUIRED)
 
 # -------------------------------------------------
 # 3. Asset Logic (POPULATE DATA FIRST)
@@ -40,10 +50,16 @@ PUBLIC
     ${Stb_INCLUDE_DIR}
 )
 
-
+target_link_libraries(assets
+PRIVATE
+  slang::slang
+)
 
 if(DEV)
-  target_compile_definitions(assets PUBLIC DEV)
+  target_compile_definitions(assets PUBLIC
+    DEV
+    SLANGC_TARGET="${SLANG_TARGET}"
+  )
 endif()
 
 # -------------------------------------------------
