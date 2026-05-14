@@ -45,23 +45,22 @@ void asset_dev_poll(void) {
   for (int i = 0; i < ASSET_COUNT_VALUE; i++) {
     // printf("i: %i\n", i);
     asset_entry *e = &ASSET_TABLE[i];
-    // if (!e->raw.path)
-    //   continue;
+    if (!e->raw.path)
+      continue;
 
-    // time_t mtime = _get_mtime(e->raw.path);
-    //
-    // // First poll — just record the timestamp, don't reload
-    // if (_asset_mtimes[i] == 0) {
-    //   _asset_mtimes[i] = mtime;
-    //   continue;
-    // }
-    //
-    // if (mtime != _asset_mtimes[i]) {
-    //   _asset_mtimes[i] = mtime;
-    //   printf("[assets] changed: %s\n", e->raw.path);
-    //   asset_free(i); // frees parsed + raw, leaving path intact
-    //   ASSET_TABLE[i].generation++;
-    // }
+    time_t mtime = _get_mtime(e->raw.path);
+
+    // First poll — just record the timestamp, don't reload
+    if (_asset_mtimes[i] == 0) {
+      _asset_mtimes[i] = mtime;
+      continue;
+    }
+
+    if (mtime != _asset_mtimes[i]) {
+      _asset_mtimes[i] = mtime;
+      printf("[assets] changed: %s\n", e->raw.path);
+      asset_free(i); // frees parsed + raw, leaving path intact
+    }
   }
 }
 #endif // DEV

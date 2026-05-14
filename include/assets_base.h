@@ -23,9 +23,6 @@ typedef struct {
   asset_type type;
   asset_data raw;
   void *parsed;
-#ifdef DEV
-  int generation;
-#endif
 } asset_entry;
 typedef int asset_id;
 
